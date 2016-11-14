@@ -11,6 +11,7 @@
 #include <stdio.h>	/* DEBUG */
 #include "limits.h"	/* AXIS, TILE_SZ */
 #include "game.h"	/* Server needs to validate moves. */
+#include "serialization.h"	/* Serializing */
 
 struct sockaddr_in init_sockaddr(int port)
 {
@@ -44,13 +45,39 @@ static int send_deck(int *players, size_t pcnt, struct tile *deck, size_t dlen)
 	return 0;
 }
 
-static int send_clock(int socket, uint64_t clock)
+enum reason {
+	SCORE = 0,
+	TIMEOUT = 1,
+	INVALID = 2
+};
+
+static int tile_eq(struct tile a, struct tile b)
 {
-	unsigned char buf[sizeof(clock)];
-	for (size_t j = 0; j < sizeof(clock); ++j) {
-		buf[j] = (unsigned char) (clock << (j * 8));
+	for (size_t i = 0; i < 5; ++i) {
+		if (a.edges[i] != b.edges[i]) {
+			return 0;
+		}
 	}
-	write(socket, buf, sizeof(buf));
+	if (a.attribute != b.attribute) {
+		return 0;
+	} else {
+		return 1;
+	}
+}
+
+static int game_over(int *players, int winner, enum reason r)
+{
+	unsigned char buf[BUF_SZ];
+	buf[0] = 1;
+	buf[2] = (uint8_t) r;
+	for (size_t i = 0; i < PLAYER_COUNT; ++i) {
+		if (i == winner) {
+			buf[1] = 1;
+		} else {
+			buf[1] = 0;
+		}
+		write(players[i], buf, sizeof(buf));
+	}
 	return 0;
 }
 
@@ -58,13 +85,19 @@ static int send_clock(int socket, uint64_t clock)
 static void protocol(void *args)
 {
 	/* Note, we should listen in a seperate thread. */
+	printf("Got here 1\n");
 	int *hostfd = (int *)args;
+	printf("Got here 1\n");
 	struct game *g = malloc(sizeof(*g));
+	printf("Got here 1.5\n");
 	make_game(g);
+	printf("Got here 2\n");
 	listen(*hostfd, 10);
 	printf("Listening.\n");
 
 	int players[PLAYER_COUNT] = {0};
+	int player = 0; /* TODO: Randomly pick player to go first. */
+	unsigned char buf[BUF_SZ];
 	for (size_t i = 0; i < PLAYER_COUNT; ++i) {
 		players[i] = accept(*hostfd, NULL, NULL);
 
@@ -74,7 +107,13 @@ static void protocol(void *args)
 		setsockopt(players[i], SOL_SOCKET, SO_RCVTIMEO,
 				(char *)&tm, sizeof(tm));
 
-		send_clock(players[i], tm.tv_sec);
+		if (i == player) {
+			buf[0] = 1;
+		} else {
+			buf[0] = 0;
+		}
+		serialize_clock(tm.tv_sec, &buf[1]);
+		write(players[i], buf, sizeof(buf));
 	}
 	printf("Connected both players!\n");
 
@@ -82,23 +121,29 @@ static void protocol(void *args)
 		printf("Failed to send deck.\n");
 	}
 
-	/* TODO: Randomly pick player to go first. */
-	int player = 0; /* Player 0 goes first. */
-	unsigned char buf[100];
-	// prev_move = NULL
+	struct move prev_move;
 	while (1) { /* Play game. */
-		// piece = draw_tile(game);
-		// write(players[player], (piece, prev_move))
-		// move = read(players[player], sizeof(move));
-		// if (read(players[player],&move,sizeof(move))<sizeof(move)) {
-		// 	/* player loses, player + 1 wins. */
-		// 	break;
-		// } else if (invalid_move(move)) {
-		// 	/* player loses, player + 1 wins. */
-		// 	break;
-		// }
-		// prev_move = move
-		player = (player + 1) % 2; /* Switch */
+		buf[0] = 0; /* We're hopefully still playing. */
+		if (!more_tiles(g)) {
+			game_over(players, 0, SCORE); /* TODO: Scoring */
+		}
+		struct tile t = deal_tile(g);
+		serialize_tile(t, buf + 1);
+		serialize_move(prev_move, buf + 1 + TILE_SZ);
+		write(players[player], buf, sizeof(buf));
+		if (read(players[player], buf, sizeof(buf)) < sizeof(buf)) {
+			/* Other player wins. */
+			game_over(players, player ^ 1, TIMEOUT);
+			break;
+		}
+		struct move m = deserialize_move(buf);
+		if (!tile_eq(t, m.tile) || play_move(g, m, player)) {
+			/* Other player wins. */
+			game_over(players, player ^ 1, TIMEOUT);
+			break;
+		}
+		prev_move = m;
+		player ^= 1; /* Switch */
 		break;
 	}
 	for (int i = 0; i < PLAYER_COUNT; ++i) {
@@ -142,8 +187,17 @@ int main(void)
 		/* Found a match. Create a child thread to host game. */
 		/* TODO: Lots of error handling. */
 		pthread_t *child = malloc(sizeof(pthread_t));
+		if (child == NULL) {
+			printf("Failed to allocate memory!\n");
+			return 1;
+		}
 		pthread_detach(*child);			/* OS will free() */
 		int *hostfd = malloc(sizeof(int));	/* Thread will free() */
+		if (hostfd == NULL) {
+			printf("Failed to allocate memory!\n");
+			free(child);
+			return 1;
+		}
 		*hostfd = socket(AF_INET, SOCK_STREAM, 0);
 		struct sockaddr_in host_addr = init_sockaddr(0); // random port
 		bind(*hostfd, (struct sockaddr *)&host_addr, sizeof(host_addr));

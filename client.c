@@ -12,6 +12,7 @@
 
 #include "limits.h"
 #include "game.h"
+#include "serialization.h"
 
 static struct sockaddr_in make_sockaddr_in_port(int port)
 {
@@ -66,17 +67,6 @@ static int connect_retry(char *host, int port)
 	return sockfd;
 }
 
-static int get_clock(int sockfd, uint64_t *clock)
-{
-	*clock = 0;
-	unsigned char buf[sizeof(*clock)];
-	read(sockfd, buf, sizeof(buf));
-	for (size_t i = 0; i < sizeof(buf); ++i) {
-		*clock += (buf[i] << (i * 8));
-	}
-	return 0;
-}
-
 static int get_deck(int sockfd, struct tile *deck, size_t clen, size_t dlen)
 {
 	unsigned char buf[clen];
@@ -121,9 +111,14 @@ int main(void)
 	}
 
 	printf("Successfully connected.\n");
-	unsigned char buf[100];
-	uint64_t move_clock;
-	get_clock(sockfd, &move_clock);
+	unsigned char buf[BUF_SZ];
+	read(sockfd, buf, sizeof(buf));
+	if (buf[0] == 1) {
+		printf("I'm first\n");
+	} else {
+		printf("I'm second\n");
+	}
+	uint64_t move_clock = deserialize_clock(&buf[1]);
 	printf("Clock: %llu\n", move_clock);
 
 	/* TODO: Refactor? */

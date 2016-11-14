@@ -144,6 +144,11 @@ int play_move(struct game *g, struct move m, int player)
 	// Graph and score stuff here.
 }
 
+int more_tiles(struct game *g)
+{
+	return TILE_COUNT - g->tiles_used - 1;
+}
+
 struct tile deal_tile(struct game *g)
 {
 	return g->tile_deck[g->tiles_used++];
