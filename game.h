@@ -1,10 +1,19 @@
 #ifndef GAME_H_
 #define GAME_H_
 
+#if __STDC_VERSION__ >= 199901L
+	#define _XOPEN_SOURCE 600
+#else
+	#define _XOPEN_SOURCE 500
+#endif
+
+#include <sys/time.h>
+#include <time.h>	/* clock_gettime() */
+
 #include <stddef.h>	/* size_t */
 #include <math.h>	/* round() */
-#include <time.h>	/* clock_gettime() */
 #include <assert.h>	/* assert() */
+#include <pthread.h>
 
 #include "limits.h"
 #include "tile.h"

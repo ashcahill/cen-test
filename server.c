@@ -7,11 +7,17 @@
 #include <arpa/inet.h>	/* htons */
 #include <sys/socket.h> /* bind(), listen(), setsockopt() */
 #include <netinet/in.h> /* struct sockaddr_in, struct sockaddr */
+#include <signal.h>	/* SIGPIPE */
 
 #include <stdio.h>	/* DEBUG */
 #include "limits.h"	/* AXIS, TILE_SZ */
 #include "game.h"	/* Server needs to validate moves. */
 #include "serialization.h"	/* Serializing */
+
+void signal_handler(int signum)
+{
+	return;
+}
 
 struct sockaddr_in init_sockaddr(int port)
 {
@@ -65,13 +71,12 @@ static int tile_eq(struct tile a, struct tile b)
 	}
 }
 
-static int game_over(int *players, int winner, enum reason r)
+static int game_over(int *players,int w, enum reason r, unsigned char *buf)
 {
-	unsigned char buf[BUF_SZ];
 	buf[0] = 1;
 	buf[2] = (uint8_t) r;
 	for (size_t i = 0; i < PLAYER_COUNT; ++i) {
-		if (i == winner) {
+		if (i == w) { /* i'th player is the winner */
 			buf[1] = 1;
 		} else {
 			buf[1] = 0;
@@ -84,20 +89,15 @@ static int game_over(int *players, int winner, enum reason r)
 /* Step through protocol with clients. */
 static void protocol(void *args)
 {
-	/* Note, we should listen in a seperate thread. */
-	printf("Got here 1\n");
 	int *hostfd = (int *)args;
-	printf("Got here 1\n");
 	struct game *g = malloc(sizeof(*g));
-	printf("Got here 1.5\n");
 	make_game(g);
-	printf("Got here 2\n");
 	listen(*hostfd, 10);
-	printf("Listening.\n");
 
 	int players[PLAYER_COUNT] = {0};
 	int player = 0; /* TODO: Randomly pick player to go first. */
 	unsigned char buf[BUF_SZ];
+	memset(buf, 0, BUF_SZ);
 	for (size_t i = 0; i < PLAYER_COUNT; ++i) {
 		players[i] = accept(*hostfd, NULL, NULL);
 
@@ -123,23 +123,21 @@ static void protocol(void *args)
 
 	struct move prev_move;
 	while (1) { /* Play game. */
-		buf[0] = 0; /* We're hopefully still playing. */
 		if (!more_tiles(g)) {
-			game_over(players, 0, SCORE); /* TODO: Scoring */
+			game_over(players, 0, SCORE, buf); // TODO Scoring
 		}
 		struct tile t = deal_tile(g);
-		serialize_tile(t, buf + 1);
-		serialize_move(prev_move, buf + 1 + TILE_SZ);
+		buf[0] = 0; /* Assume still playing. */
+		serialize_tile(t, &buf[1]);
+		serialize_move(prev_move, &buf[1 + TILE_SZ]);
 		write(players[player], buf, sizeof(buf));
-		if (read(players[player], buf, sizeof(buf)) < sizeof(buf)) {
-			/* Other player wins. */
-			game_over(players, player ^ 1, TIMEOUT);
+		if (read(players[player], buf, sizeof(buf))<sizeof(buf)) {
+			game_over(players, player ^ 1, TIMEOUT, buf);
 			break;
 		}
 		struct move m = deserialize_move(buf);
 		if (!tile_eq(t, m.tile) || play_move(g, m, player)) {
-			/* Other player wins. */
-			game_over(players, player ^ 1, TIMEOUT);
+			game_over(players, player ^ 1, INVALID, buf);
 			break;
 		}
 		prev_move = m;

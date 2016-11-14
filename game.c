@@ -67,7 +67,7 @@ static void init_deck(struct tile deck[TILE_COUNT])
 		const enum edge b[2] = {ROAD, FIELD};
 		deck[ind++] =
 			make_tile((enum edge[5]){CITY,b[i%2],b[i%2],CITY,CITY},
-			a[i]);
+			a[i % 5]);
 	}
 	for (int i = 0; i < 9; ++i) {
 		deck[ind++] =
